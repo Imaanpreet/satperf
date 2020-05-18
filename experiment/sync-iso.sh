@@ -28,7 +28,7 @@ section "Checking environment"
 generic_environment_check
 
 section "Sync test"
-ap 10-test-sync-repositories.log playbooks/tests/sync-repositories.yaml -e "test_sync_repositories_count=$test_sync_repositories_count test_sync_repositories_url_template=$test_sync_repositories_url_template test_sync_repositories_max_sync_secs=$test_sync_repositories_max_sync_secs"
+ap 10-test-sync-repositories.log playbooks/tests/sync-iso.yaml -e "test_sync_repositories_count=$test_sync_repositories_count test_sync_repositories_url_template=$test_sync_repositories_url_template test_sync_repositories_max_sync_secs=$test_sync_repositories_max_sync_secs"
 
 section "Summary"
 e SyncRepositories $logs/10-test-sync-repositories.log
@@ -36,3 +36,4 @@ e PublishContentViews $logs/10-test-sync-repositories.log
 e PromoteContentViews $logs/10-test-sync-repositories.log
 
 junit_upload
+~             

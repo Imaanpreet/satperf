@@ -78,6 +78,39 @@ function measurement_row_field() {
     python -c "import csv; import sys; reader=csv.reader(sys.stdin); print list(reader)[0][int(sys.argv[1])-1]" $1
 }
 
+function generic_environment_check() {
+    extended=${1:-true}
+    a 00-info-rpm-qa.log satellite6 -m "shell" -a "rpm -qa | sort"
+    a 00-info-hostname.log satellite6 -m "shell" -a "hostname"
+    a 00-info-ip-a.log satellite6,docker-hosts -m "shell" -a "ip a"
+    a 00-check-ping-sat.log docker-hosts -m "shell" -a "ping -c 3 {{ groups['satellite6']|first }}"
+    a 00-check-hammer-ping.log satellite6 -m "shell" -a "! ( hammer $hammer_opts ping | grep 'Status:' | grep -v 'ok$' )"
+
+    if $extended; then
+        ap 00-recreate-containers.log playbooks/docker/docker-tierdown.yaml playbooks/docker/docker-tierup.yaml
+        ap 00-recreate-client-scripts.log playbooks/satellite/client-scripts.yaml
+        ap 00-remove-hosts-if-any.log playbooks/satellite/satellite-remove-hosts.yaml
+    fi
+
+    a 00-satellite-drop-caches.log -m shell -a "foreman-maintain service stop; sync; echo 3 > /proc/sys/vm/drop_caches; foreman-maintain service start" satellite6
+
+    a 00-info-rpm-q-katello.log satellite6 -m "shell" -a "rpm -q katello"
+    katello_version=$( tail -n 1 $logs/00-info-rpm-q-katello.log ); echo "$katello_version" | grep '^katello-[0-9]\.'   # make sure it was detected correctly
+    a 00-info-rpm-q-satellite.log satellite6 -m "shell" -a "rpm -q satellite || true"
+    satellite_version=$( tail -n 1 $logs/00-info-rpm-q-satellite.log )
+
+    set +e   # Quit "-e" mode as from now on failure is not fatal
+    s $( expr 3 \* $wait_interval )
+}
+
+function get_repo_id() {
+    local tmp=$( mktemp )
+    local product="$1"
+    local repo="$2"
+    h_out "--output yaml repository info --organization '$do' --product '$product' --name '$repo'" >$tmp
+    grep '^ID:' $tmp | cut -d ' ' -f 2
+}
+
 function status_data_create() {
     # For every measurement, create new status data file, consult with
     # historical data if test result is PASS or FAIL, upload current result
@@ -271,7 +304,15 @@ function c() {
     fi
     local end=$( date --utc +%s )
     log "Finish after $( expr $end - $start ) seconds with log in $out and exit code $rc"
-    measurement_add "$@" "$out" "$rc" "$start" "$end" "$katello_version" "$satellite_version" "$marker"
+    measurement_add \
+        "$@" \
+        "$out" \
+        "$rc" \
+        "$start" \
+        "$end" \
+        "$katello_version" \
+        "$satellite_version" \
+        "$marker"
     return $rc
 }
 
@@ -288,7 +329,15 @@ function a() {
     fi
     local end=$( date --utc +%s )
     log "Finish after $( expr $end - $start ) seconds with log in $out and exit code $rc"
-    measurement_add "ansible $opts_adhoc $( _format_opts "$@" )" "$out" "$rc" "$start" "$end" "$katello_version" "$satellite_version" "$marker"
+    measurement_add \
+        "ansible $opts_adhoc $( _format_opts "$@" )" \
+        "$out" \
+        "$rc" \
+        "$start" \
+        "$end" \
+        "$katello_version" \
+        "$satellite_version" \
+        "$marker"
     return $rc
 }
 
@@ -314,7 +363,15 @@ function ap() {
     fi
     local end=$( date --utc +%s )
     log "Finish after $( expr $end - $start ) seconds with log in $out and exit code $rc"
-    measurement_add "ansible-playbook $opts $( _format_opts "$@" )" "$out" "$rc" "$start" "$end" "$katello_version" "$satellite_version" "$marker"
+    measurement_add \
+        "ansible-playbook $opts $( _format_opts "$@" )" \
+        "$out" \
+        "$rc" \
+        "$start" \
+        "$end" \
+        "$katello_version" \
+        "$satellite_version" \
+        "$marker"
     return $rc
 }
 
@@ -350,7 +407,56 @@ function e() {
     local passed=$( grep "^$grepper" $log_report | tail -n 1 | cut -d ' ' -f 6 )
     local avg_duration=$( grep "^$grepper" $log_report | tail -n 1 | cut -d ' ' -f 8 )
     log "Examined $log for $grepper: $duration / $passed = $avg_duration (ranging from $started_ts to $ended_ts)"
-    measurement_add "experiment/reg-average.sh '$grepper' '$log'" "$log_report" "$rc" "$started_ts" "$ended_ts" "$katello_version" "$satellite_version" "$marker" "results.items.duration=$duration results.items.passed=$passed results.items.avg_duration=$avg_duration results.items.report_rc=$rc"
+    measurement_add \
+        "experiment/reg-average.sh '$grepper' '$log'" \
+        "$log_report" \
+        "$rc" \
+        "$started_ts" \
+        "$ended_ts" \
+        "$katello_version" \
+        "$satellite_version" \
+        "$marker" \
+        "results.items.duration=$duration results.items.passed=$passed results.items.avg_duration=$avg_duration results.items.report_rc=$rc"
+}
+
+function t() {
+    # Show task duration without outliners
+    local log="$1"
+    local task_id="$( extract_task "$log" )"
+    [ -z "$task_id" ] && return 1
+    local satellite_host="$( ansible -i "$PARAM_inventory" --list-hosts satellite6 2>/dev/null | tail -n 1 | sed -e 's/^\s\+//' -e 's/\s\+$//' )"
+    [ -z "$satellite_host" ] && return 2
+    local log_report="$( echo "$log" | sed "s/\.log$/-duration.log/" )"
+
+    scripts/get-task-fuzzy-duration.py --hostname $satellite_host --task-id "$task_id" --percentage 5 --output status-data &>$log_report
+    local rc=$?
+    started_ts="$( date -d "$( grep '^results.tasks.start=' $log_report | cut -d '"' -f 2 )" +%s )"
+    ended_ts="$( date -d "$( grep '^results.tasks.end=' $log_report | cut -d '"' -f 2 )" +%s )"
+    head_tail_perc="$( grep '^results.tasks.percentage_removed=' $log_report | cut -d '"' -f 2 )"
+    log "Examined task $task_id and if have $head_tail_perc % of head/tail (ranging from $started_ts to $ended_ts)"
+    measurement_add \
+        "experiment/reg-average.sh '$grepper' '$log'" \
+        "$log_report" \
+        "$rc" \
+        "$started_ts" \
+        "$ended_ts" \
+        "$katello_version" \
+        "$satellite_version" \
+        "$marker" \
+        "$( grep '^results.tasks.[a-zA-Z0-9_]*="[^"]*"$' $log_report )"
+}
+
+function extract_task() {
+    # Take log with hammer run log and extract task ID from it. Do not return
+    # anything if more task IDs are found or in case of any other error.
+    log="$1"
+    candidates=$( grep '^Task [0-9a-zA-Z-]\+ running' "$log" | cut -d ' ' -f 2 | uniq )
+    # Only print f we have exactly one task ID
+    if [ $( echo "$candidates" | wc -l | cut -d ' ' -f 1 ) -eq 1 ]; then
+        echo "$candidates"
+        return 0
+    fi
+    return 1
 }
 
 function table_row() {

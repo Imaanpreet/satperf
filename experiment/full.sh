@@ -29,20 +29,7 @@ opts_adhoc="$opts --user root -e @conf/satperf.yaml -e @conf/satperf.local.yaml"
 
 
 section "Checking environment"
-a 00-info-rpm-qa.log satellite6 -m "shell" -a "rpm -qa | sort"
-a 00-info-hostname.log satellite6 -m "shell" -a "hostname"
-a 00-check-ping-sat.log docker-hosts -m "shell" -a "ping -c 3 {{ groups['satellite6']|first }}"
-a 00-check-hammer-ping.log satellite6 -m "shell" -a "! ( hammer $hammer_opts ping | grep 'Status:' | grep -v 'ok$' )"
-ap 00-recreate-containers.log playbooks/docker/docker-tierdown.yaml playbooks/docker/docker-tierup.yaml
-ap 00-recreate-client-scripts.log playbooks/satellite/client-scripts.yaml
-ap 00-remove-hosts-if-any.log playbooks/satellite/satellite-remove-hosts.yaml
-a 00-satellite-drop-caches.log -m shell -a "katello-service stop; sync; echo 3 > /proc/sys/vm/drop_caches; katello-service start" satellite6
-a 00-info-rpm-q-katello.log satellite6 -m "shell" -a "rpm -q katello"
-katello_version=$( tail -n 1 $logs/00-info-rpm-q-katello.log ); echo "$katello_version" | grep '^katello-[0-9]\.'   # make sure it was detected correctly
-a 00-info-rpm-q-satellite.log satellite6 -m "shell" -a "rpm -q satellite || true"
-satellite_version=$( tail -n 1 $logs/00-info-rpm-q-satellite.log )
-s $( expr 3 \* $wait_interval )
-set +e
+generic_environment_check
 
 
 section "Prepare for Red Hat content"
@@ -85,13 +72,9 @@ s $wait_interval
 section "Publish and promote big CV"
 # Workaround for https://bugzilla.redhat.com/show_bug.cgi?id=1782707
 if vercmp_ge "$katello_version" "3.16.0" || vercmp_ge "$satellite_version" "6.6.0"; then
-    rids=""
-    for r in 'Red Hat Enterprise Linux 7 Server RPMs x86_64 7Server' 'Red Hat Enterprise Linux 6 Server RPMs x86_64 6Server' 'Red Hat Enterprise Linux 7 Server - Optional RPMs x86_64 7Server'; do
-        tmp=$( mktemp )
-        h_out "--output yaml repository info --organization '$do' --product 'Red Hat Enterprise Linux Server' --name '$r'" >$tmp
-        rid=$( grep '^ID:' $tmp | cut -d ' ' -f 2 )
-        [ ${#rids} -eq 0 ] && rids="$rid" || rids="$rids,$rid"
-    done
+    rids="$( get_repo_id 'Red Hat Enterprise Linux Server' 'Red Hat Enterprise Linux 7 Server RPMs x86_64 7Server' )"
+    rids="$rids,$( get_repo_id 'Red Hat Enterprise Linux Server' 'Red Hat Enterprise Linux 6 Server RPMs x86_64 6Server' )"
+    rids="$rids,$( get_repo_id 'Red Hat Enterprise Linux Server' 'Red Hat Enterprise Linux 7 Server - Optional RPMs x86_64 7Server' )"
     h 20-cv-create-all.log "content-view create --organization '$do' --repository-ids '$rids' --name 'BenchContentView'"
 else
     h 20-cv-create-all.log "content-view create --organization '$do' --product 'Red Hat Enterprise Linux Server' --repositories 'Red Hat Enterprise Linux 7 Server RPMs x86_64 7Server','Red Hat Enterprise Linux 6 Server RPMs x86_64 6Server','Red Hat Enterprise Linux 7 Server - Optional RPMs x86_64 7Server' --name 'BenchContentView'"
@@ -112,10 +95,8 @@ s $wait_interval
 section "Publish and promote filtered CV"
 # Workaround for https://bugzilla.redhat.com/show_bug.cgi?id=1782707
 if vercmp_ge "$katello_version" "3.16.0" || vercmp_ge "$satellite_version" "6.6.0"; then
-    tmp=$( mktemp )
-    h_out "--output yaml repository info --organization '$do' --product 'Red Hat Enterprise Linux Server' --name 'Red Hat Enterprise Linux 6 Server RPMs x86_64 6Server'" >$tmp
-    rid=$( grep '^ID:' $tmp | cut -d ' ' -f 2 )
-    h 30-cv-create-filtered.log "content-view create --organization '$do' --repository-ids '$rid' --name 'BenchFilteredContentView'"
+    rids="$( get_repo_id 'Red Hat Enterprise Linux Server' 'Red Hat Enterprise Linux 6 Server RPMs x86_64 6Server' )"
+    h 30-cv-create-filtered.log "content-view create --organization '$do' --repository-ids '$rids' --name 'BenchFilteredContentView'"
 else
     h 30-cv-create-filtered.log "content-view create --organization '$do' --product 'Red Hat Enterprise Linux Server' --repositories 'Red Hat Enterprise Linux 6 Server RPMs x86_64 6Server' --name 'BenchFilteredContentView'"
 fi
