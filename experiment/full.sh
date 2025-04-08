@@ -646,4 +646,23 @@ done
 #Product Deletion
 h "104-product-delete-${os_product}.log" "product delete --organization '{{ sat_org }}' --name '$os_product'"
 
+section 'Flatpak Support'
+
+#flatpak remote create 
+h "105-flatpak-remote create --name 'Red Hat Flatpak' --url 'https://flatpaks.redhat.io/rhel' --organization '{{ sat_org }}' --username '' --token '' "
+
+#scan flatpak remote 
+h "106-flatpak-remote scan <what to scan>"
+
+#mirror remote repositories
+h "107-flatpak-remote remote-repository mirror --name '' --product '' --flatpak-remote-id '' --organization '{{ sat_org }}' "
+
+#sync the repositories
+
+#publish the repositories
+
+#promote repositories 
+
+
+
 junit_upload
