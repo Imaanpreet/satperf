@@ -17,9 +17,9 @@ sat_client_product='Satellite Client'
 repo_sat_client="${PARAM_repo_sat_client:-http://mirror.example.com}"
 
 rhosp_product=RHOSP
-rhosp_registry_url="${PARAM_rhosp_registry_url:-https://registry.example.io}"
+rhosp_registry_url="https://${PARAM_rhosp_registry:-https://registry.example.io}"
 rhosp_registry_username="${PARAM_rhosp_registry_username:-user}"
-rhosp_registry_password="${PARAM_rhosp_registry_password:-pass}"
+rhosp_registry_password="${PARAM_rhosp_registry_password:-password}"
 
 initial_expected_concurrent_registrations="${PARAM_initial_expected_concurrent_registrations:-64}"
 
@@ -261,7 +261,7 @@ h 33-cv-filtered-publish.log "content-view publish --organization '{{ sat_org }}
 export skip_measurement=true
 section 'Get Satellite Client content'
 # Satellite Client
-h 30-sat-client-product-create.log "product create --organization '{{ sat_org }}' --name '$sat_client_product'"
+h 30-product-create-sat-client.log "product create --organization '{{ sat_org }}' --name '$sat_client_product'"
 
 for rel in $rels; do
     ccv="CCV_${rel}"
@@ -334,7 +334,6 @@ for rel in $rels; do
         cv_osp="CV_${rel}-osp"
 
         h "40-cv-create-rhosp-${rel}.log" "content-view create --organization '{{ sat_org }}' --name '$cv_osp' --repository-ids '$rhosp_rids'"
-
         h "40-cv-publish-rhosp-${rel}.log" "content-view publish --organization '{{ sat_org }}' --name '$cv_osp'"
 
         # CCV with RHOSP
@@ -612,39 +611,44 @@ ap 99-remove-hosts-if-any.log \
   playbooks/satellite/satellite-remove-hosts.yaml
 
 
+section 'Delete base LCE(s), CCV(s) and AK(s)'
+# AK deletion
+for rel in $rels; do
+    for lce in $lces; do
+        ak="AK_${rel}_${lce}"
+        h "100-ak-delete-${rel}-${lce}.log" "activation-key delete --organization '{{ sat_org }}' --name '$ak'"
+    done
+done
+
+# LCE deletion
+for lce in $lces; do
+    h "101-lce-delete-${lce}.log" "lifecycle-environment delete --organization '{{ sat_org }}' --name '$lce'"
+done
+
+# CVV deletion
+for rel in $rels; do
+    ccv="CCV_$rel"
+
+    h "102-ccv-delete-${rel}.log" "content-view delete --organization '{{ sat_org }}' --name '$ccv'"
+done
+
+# Repository deletion
+for os_rid in $os_rids; do
+    h "103-repository-delete-${os_rid}.log" "repository delete --organization '{{ sat_org }}' --name '$os_rid'"
+done
+
+# Product deletion
+# Satellite Client
+h 104-product-delete-sat-client.log "product delete --organization '{{ sat_org }}' --name '$sat_client_product'"
+# RHOSP
+h 104-product-delete-rhosp.log "product delete --organization '{{ sat_org }}' --name '$rhosp_product'"
+
+
 section 'Sosreport'
 skip_measurement=true ap sosreporter-gatherer.log \
   -e "sosreport_gatherer_local_dir='../../$logs/sosreport/'" \
   playbooks/satellite/sosreport_gatherer.yaml
 
-section 'Deleting'
-
-#AK Deletion
-for rel in $rels; do
-    for lce in $lces; do
-        ak="AK_${rel}_${lce}"
-        h "100-ak-delete-${lce}.log" "activation-key delete --organization-id '{{ sat_org }}' --name '$ak' --lifecycle-environment '$lce'"
-    done
-done
-
-#LCE Deletion
-for lce in $lces; do
-    h "101-lce-delete-${lce}.log" "lifecycle-environment delete --organization-id '{{ sat_org }}' --name '$lce'"
-done
-
-#CVV deletion
-for rel in $rels; do
-    ccv="CCV_$rel"
-    h "102-ccv-delete-${rel}.log" "content-view delete --organization '{{ sat_org }}' --name '$ccv'"
-done
-
-#Repository Deletion
-for os_rid in $os_rids; do
-    h "103-repository-delete-${os_rid}.log" "repository delete --organization '{{ sat_org }}' --name '$os_rid'"
-done
-
-#Product Deletion
-h "104-product-delete-${os_product}.log" "product delete --organization '{{ sat_org }}' --name '$os_product'"
 
 section 'Flatpak Support'
 
